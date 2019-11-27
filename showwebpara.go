@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
+	//"strings"
 )
 
 func showPara(w http.ResponseWriter, r *http.Request) {
