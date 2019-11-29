@@ -1,0 +1,2 @@
+http://www.baidu.com
+http://www.sina.com.cn     ~datetimenow2 ='\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}'
