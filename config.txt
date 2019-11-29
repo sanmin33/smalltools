@@ -1,0 +1,3 @@
+smtp.qq.com,465,xxxx@qq.com,njxwbhda
+xxxx@qq.com
+xxxx@qq.com
