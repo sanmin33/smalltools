@@ -54,4 +54,4 @@ error: expected '=', ',', ';', 'asm' or '__attribute__' before ' 问题：需要
 从上述情况可以看到使用cgo环境配置要麻烦些，但代码要简单些，go和c之间的数据类型对应也方便一些。    
 但是需要头文件，无头文件只能用syscall     
 我的程序最终使用Cgo解决。     
-先参见：https://www.cntofu.com/book/73/ch2-cgo/ch2-02-basic.md    
+  
