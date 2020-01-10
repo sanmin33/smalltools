@@ -7,7 +7,6 @@ import (
         "log"
         "net"
         "net/http"
-        "net/url"
         "strings"
 )
 
@@ -15,12 +14,12 @@ func main() {
         log.SetFlags(log.LstdFlags | log.Lshortfile)
         tcpaddr, err := net.ResolveTCPAddr("tcp4", ":8080")
         if err != nil {
-                fmt.Println("开始tcp侦听出错")
+                fmt.Println("侦听地址错",err)
                 return
         }
         tcplisten, err := net.ListenTCP("tcp", tcpaddr)
         if err != nil {
-                log.Panic(err)
+                fmt.Println("开始tcp侦听出错",err)
         }
 
         for {
@@ -46,14 +45,14 @@ func handleAHttp(client *net.TCPConn) {
         bfr := bufio.NewReader(strings.NewReader(string(byteHeader)))
         req, err := http.ReadRequest(bfr)
         if err != nil {
-                fmt.Println("转换request失败", err)
+                log.Println("转换request失败", err)
                 return
         }
         var method, host, address string
         method = req.Method
         host = req.Host
-        hostPortURL, err := url.Parse(host)
-        fmt.Println("取request信息m:", method, "host:", host, "hostPortURL:", hostPortURL)
+        //hostPortURL, err := url.Parse(host)
+        fmt.Println("取request信息m:", method, "host:", host)//, "hostPortURL:", hostPortURL)
         if err != nil {
                 log.Println(err)
                 return
@@ -70,12 +69,12 @@ func handleAHttp(client *net.TCPConn) {
         //获得了请求的host和port，就开始拨号吧
         tcpaddr, err := net.ResolveTCPAddr("tcp4", address)
         if err != nil {
-                fmt.Println("tcp地址错误", address, err)
+                log.Println("tcp地址错误", address, err)
                 return
         }
         server, err := net.DialTCP("tcp", nil, tcpaddr)
         if err != nil {
-                fmt.Println(err)
+                log.Println(err)
                 return
         }
         if method == "CONNECT" {
@@ -94,7 +93,7 @@ func handleAHttp(client *net.TCPConn) {
 func readSplitString(r *net.TCPConn, delim []byte) []byte {
         var rs []byte
         lenth := len(delim)
-        fmt.Println("demim lenth:", lenth, "delim:", delim)
+        //fmt.Println("demim lenth:", lenth, "delim:", delim)
         curByte := make([]byte, 1)
 
         //先读取分隔符长度-1个字节，以避免在下面循环中每次都要判断是否读够分隔符长度的字节。
@@ -115,12 +114,6 @@ func readSplitString(r *net.TCPConn, delim []byte) []byte {
                                 break
                         }
                 }
-                /*
-                        for k := 0; k < lenth; k++ {
-                                fmt.Print(rs[len(rs)-1-k], " ")
-                        }
-                        fmt.Println("m=:", m)
-                */
                 if m == lenth {
                         return rs
                 }
