@@ -1,5 +1,5 @@
 /*加密传输的proxy，采用RC4加密，
-*/
+ */
 package main
 
 import (
@@ -102,9 +102,13 @@ func handleAServerConn(client *net.TCPConn) {
 		log.Println(err)
 		return
 	}
-	//服务端得到的报头，客户端已经处理过了，服务端只需要无脑转发信息给web服务器就可以了
-	server.Write(byteHeader[0:len(byteHeader)]) //最始的报头信息已经解密了，这里直接转发给web
-
+	if method == "CONNECT" {
+		bufTemp := []byte("HTTP/1.1 200 Connection established\r\n\r\n")
+		psToc.C.XORKeyStream(bufTemp, bufTemp)
+		client.Write(bufTemp)
+	} else {
+		server.Write(byteHeader[0:len(byteHeader)]) //最始的报头信息已经解密了，这里直接转发给web
+	}
 	//接下来得到的都是还没有解密的信息，进行解密转发
 	go pcTos.encryptCopy(server, client) //服务端收到的是密文，编码后就成了明文并传给web
 	psToc.encryptCopy(client, server)    //web发过来的是明文，编码后就成了密文，并传给客户端
