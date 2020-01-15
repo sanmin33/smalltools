@@ -1,4 +1,4 @@
-/*加密传输的proxy，采用RC4加密，
+/*加密传输的proxy，采用RC4加密，这是客户端
 */
 package main
 
