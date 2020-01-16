@@ -6,9 +6,11 @@ import (
 	"crypto/rc4"
 	"flag"
 	"fmt"
+	"github.com/buger/jsonparser"
 	"io"
 	"log"
 	"net"
+	"os"
 	"runtime"
 )
 
@@ -16,30 +18,60 @@ type Rc4 struct {
 	C *rc4.Cipher
 }
 
-var pwd string = "helloworld"
-var fclientport = flag.String("cp", "8080", "监听端口号")
-var fip = flag.String("ip", "", "服务器IP")
-var fserverport = flag.String("sp", "8080", "服务器端口")
+var pwd string = "协议中的头信息和正文是采用空行分开"
+var ffilename = flag.String("f", "config.json", "配置文件名")
 
+var fileName string
 var serverIP string
-var clientPort string
+var localPort string
 var serverPort string
 
 func init() {
 
 	flag.Parse()
-	serverIP = *fip
-	clientPort = ":" + *fclientport
-	serverPort = *fserverport
+	fileName = *ffilename
 }
 
 func main() {
+	f, err := os.Open(fileName)
+	if err != nil {
+		fmt.Println("打开配置文件失败")
+		return
+	}
+	var jsondata []byte
+	var buf = make([]byte, 1)
+	for n, err := f.Read(buf); err == nil && n > 0; n, err = f.Read(buf) {
+		jsondata = append(jsondata, buf[0])
+	}
+	localPort, err = jsonparser.GetString(jsondata, "localPort")
+	if err != nil {
+		fmt.Println("配置文件中无服务端口号", localPort, err)
+		return
+	}
+	localPort = ":" + localPort
+	serverIP, err = jsonparser.GetString(jsondata, "serverIP")
+	if err != nil {
+		fmt.Println("配置文件中无服务器ip", serverIP, err)
+		return
+	}
+	serverPort, err = jsonparser.GetString(jsondata, "serverPort")
+	if err != nil {
+		fmt.Println("配置文件中无服务端口号", serverPort, err)
+		return
+	}
+
+	pwd, err = jsonparser.GetString(jsondata, "password")
+	if err != nil {
+		fmt.Println("配置文件中无密码", err)
+		return
+	}
+
 	if serverIP == "" || serverPort == "" {
 		fmt.Println("请输入服务器IP及端口号")
 		return
 	}
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	tcpaddr, err := net.ResolveTCPAddr("tcp4", clientPort)
+	tcpaddr, err := net.ResolveTCPAddr("tcp4", localPort)
 	if err != nil {
 		fmt.Println("侦听地址错", err)
 		return
@@ -52,15 +84,18 @@ func main() {
 	for {
 		client, err := tcplisten.AcceptTCP()
 		if err != nil {
-			log.Println("当前协程数量：", runtime.NumGoroutine)
+			log.Println("当前协程数量：", runtime.NumGoroutine())
 			log.Panic(err)
 		}
 
+		log.Println("当前协程数量：", runtime.NumGoroutine())
 		go handleAClientConn(client)
 	}
 }
 
 func handleAClientConn(client *net.TCPConn) {
+
+	defer client.Close()
 	c1, _ := rc4.NewCipher([]byte(pwd))
 	c2, _ := rc4.NewCipher([]byte(pwd))
 	pcTos := &Rc4{c1}
@@ -70,7 +105,6 @@ func handleAClientConn(client *net.TCPConn) {
 		fmt.Println("tcp连接空")
 		return
 	}
-	defer client.Close()
 
 	address := serverIP + ":" + serverPort
 	fmt.Println("服务器地址address:", address)
