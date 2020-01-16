@@ -1,0 +1,6 @@
+{
+"localPort":"8080"
+"serverIP":"10.1.1.227"
+"serverPort":"12666"
+"password":"包分析协程和分发主循环用channel进行通讯"
+}
