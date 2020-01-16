@@ -1,7 +1,13 @@
 #### golang写的简单正向https代理服务器
 ----2020.01.15-------- 
 + 修改为分客户端和服务端，客户端和服务端采用RC4加密  
-  
++ 存在问题，由于大量占用tcp连接，打开网页过多的情况下，linux系统可能会出现文件打开过多错误，需要修改操作系统最大文件打开数量  
+方法：  
+临时修改  ulimit -n xxxx  
+永久修改  修改 /etc/security/limits.conf文件  
+追加
+* soft nofile xxxx  
+* hard nofile xxxx  
 ----2020.01.15--------  
 
 使用tcp连接，自己解析http协议解决
