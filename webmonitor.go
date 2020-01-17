@@ -172,6 +172,7 @@ func readAURL(url string) (string, error) {
 	}
 
 	//处理返回结果
+	reqest.Close=true  //golang的http服务端和客户端默认都是长连接，这里设置为短连接，坑呀！！！
 	response, err := client.Do(reqest)
 
 	//TODO 需要等待数据返回吗？选等一秒吧
