@@ -9,10 +9,10 @@ import (
 	"bufio"
 	"crypto/tls"
 	"errors"
+	"github.com/sanmin33/diff"
 	"net/http"
 	"os"
 	"regexp"
-
 	"runtime"
 	"strconv"
 	"strings"
@@ -25,11 +25,14 @@ import (
 var interval = flag.Int("interval", 10, "两次读取网页监控的间隔时间")
 var fileName = flag.String("file", "urls.txt", "存放要扫描的ip列表文件名,每个ip一行，不留空行")
 var help = flag.String("h", "", "help")
+var forceMon = flag.String("f", "n", "是否强制进行监控状态")
 
 type PagesStruct struct {
 	sync.Mutex
 	oldPages map[string]string
+	oldMM    map[string]map[string]string //用于存放网页二级src资源的url及内容
 	nowPages map[string]string
+	nowMM    map[string]map[string]string //用于存放网页二级src资源的url及内容
 	reString map[string]string
 	isOpen   map[string]bool
 }
@@ -49,7 +52,11 @@ func main() {
 
 	flag.Parse()
 	pages.oldPages = make(map[string]string)
+	pages.oldMM = make(map[string]map[string]string)
+
 	pages.nowPages = make(map[string]string)
+	pages.nowMM = make(map[string]map[string]string)
+
 	pages.reString = make(map[string]string)
 	pages.isOpen = make(map[string]bool)
 	writeToFile("./log/change.txt", fmt.Sprint(time.Now().Format("2006/1/2 15:04:05"))+" 监控程序启动。。。。\n")
@@ -136,7 +143,7 @@ func FileRead(name string) {
 			haveDiffPage = true
 		}
 	}
-	if haveDiffPage {
+	if haveDiffPage && *forceMon == "n" {
 		fmt.Println("..........")
 		fmt.Println("因存在有动态参数网页未处理，程序退出，具体网页差异见oldpages.html和nowpages.html，请处理后重新运行程序")
 		fmt.Println("..........")
@@ -153,12 +160,12 @@ func FileRead(name string) {
 func readAURL(url string) (string, error) {
 	var err error
 	pageBuf := make([]byte, 4096)
-	//client := &http.Client{}
+	//	client := &http.Client{}
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	client := &http.Client{Transport: tr}
-	//提交请求
+	//生成请求
 	reqest, err := http.NewRequest("GET", url, nil)
 
 	//增加header选项,前两个参数是强制刷新不缓存网页数据
@@ -172,7 +179,7 @@ func readAURL(url string) (string, error) {
 	}
 
 	//处理返回结果
-	reqest.Close=true  //golang的http服务端和客户端默认都是长连接，这里设置为短连接，坑呀！！！
+	reqest.Close = true
 	response, err := client.Do(reqest)
 
 	//TODO 需要等待数据返回吗？选等一秒吧
@@ -195,7 +202,9 @@ func readAURL(url string) (string, error) {
 		n, err = response.Body.Read(pageBuf)
 		page = page + string(pageBuf[:n])
 	}
-
+	if page == "" {
+		return page, errors.New("读取到空页面，这是不正常的!!!")
+	}
 	return page, nil
 }
 
@@ -203,15 +212,18 @@ func monAPage(url string) {
 	var page string
 	var err error
 
+	defer func() {
+		fmt.Println("程序异常退出了。。。", time.Now())
+	}()
+
 	for {
 		page, err = readAURL(url)
-
 		if err != nil {
 			// 发送网页无法打开的错误给预留邮箱。
 
 			if pages.isOpen[url] == true {
 				fmt.Println("异常，无法打开网页", url, fmt.Sprint(err), time.Now())
-				SendMail("erroring 网页无法打开", url+", "+fmt.Sprint(err))
+				err = SendMail("读网页错误", url)
 
 				_, err = writeToFile("./log/change.txt", fmt.Sprint(time.Now().Format("2006/1/2 15:04:05"))+" "+url+" 无法打开网页 "+fmt.Sprint(err)+"\n")
 				if err != nil {
@@ -221,59 +233,52 @@ func monAPage(url string) {
 				pages.isOpen[url] = false
 			}
 
-		} else if pages.reString[url] != "" {
+			time.Sleep(time.Second * time.Duration(*interval))
+			continue
+		}
+		if pages.reString[url] != "" {
 			re, _ := regexp.Compile(pages.reString[url])
 			page = re.ReplaceAllString(page, "")
-
-			pages.Lock()
-			pages.nowPages[url] = page
-			pages.Unlock()
-
-			if pages.isOpen[url] == false {
-				fmt.Println("网页已恢复", url)
-
-				_, err = writeToFile("./log/change.txt", fmt.Sprint(time.Now().Format("2006/1/2 15:04:05"))+" "+url+" 网页已恢复\n")
-				if err != nil {
-					fmt.Println("写入change.txt文件失败")
-				}
-				SendMail("网页已恢复", url)
-
-				pages.isOpen[url] = true
-			}
-
-		} else {
-			pages.Lock()
-			pages.nowPages[url] = page
-			pages.Unlock()
-
-			if pages.isOpen[url] == false {
-				fmt.Println("网页已恢复", url)
-
-				_, err = writeToFile("./log/change.txt", fmt.Sprint(time.Now().Format("2006/1/2 15:04:05"))+" "+url+" 网页已恢复\n")
-				if err != nil {
-					fmt.Println("写入change.txt文件失败")
-				}
-				SendMail("网页已恢复", url)
-
-				pages.Lock()
-				pages.isOpen[url] = true
-				pages.Unlock()
-			}
 		}
 
+		pages.Lock()
+		pages.nowPages[url] = page
+		pages.Unlock()
+
+		if pages.isOpen[url] == false {
+			fmt.Println("网页已恢复", url)
+
+			_, err = writeToFile("./log/change.txt", fmt.Sprint(time.Now().Format("2006/1/2 15:04:05"))+" "+url+" 网页已恢复\n")
+			if err != nil {
+				fmt.Println("写入change.txt文件失败")
+			}
+			err = SendMail("网页已恢复", url)
+
+			pages.isOpen[url] = true
+		}
 		if pages.nowPages[url] != pages.oldPages[url] {
+			diffstr := difftxt(pages.oldPages[url], pages.nowPages[url])
+			diffstr = strings.Replace(diffstr, "<", "&lt", -1)
+			diffstr = strings.Replace(diffstr, ">", "&gt", -1)
 			fmt.Println(url, "\n", "warnning 网页已变动")
+			fmt.Println(diffstr)
 			fmt.Println("两次网页的内容分别保存于同目录下urlold.html和urlnow.html文件中，请用文本比较工具查看差异部分")
+
+			preFileName := time.Now().Format("2006-01-02")
 
 			_, err = writeToFile("./log/change.txt", fmt.Sprint(time.Now().Format("2006/1/2 15:04:05"))+" "+url+" 内容已变动\n")
 			if err != nil {
 				fmt.Println("写入change.txt文件失败")
 			}
-			_, err = writeToFile("./log/old.html", url+"\n"+fmt.Sprintln(time.Now().Format("2006/1/2 15:04:05"))+pages.oldPages[url]+"\n")
+
+			oldFileName := "./log/" + preFileName + "old.html"
+			_, err = writeToFile(oldFileName, url+"\n"+fmt.Sprintln(time.Now().Format("2006/1/2 15:04:05"))+pages.oldPages[url]+"\n")
 			if err != nil {
 				fmt.Println("写入url_old.html文件失败")
 			}
-			_, err = writeToFile("./log/now.html", url+"\n"+fmt.Sprintln(time.Now().Format("2006/1/2 15:04:05"))+pages.nowPages[url]+"\n")
+
+			nowFileName := "./log/" + preFileName + "now.html"
+			_, err = writeToFile(nowFileName, url+"\n"+fmt.Sprintln(time.Now().Format("2006/1/2 15:04:05"))+pages.nowPages[url]+"\n")
 			if err != nil {
 				fmt.Println("写入url_now.html文件失败")
 			}
@@ -281,7 +286,7 @@ func monAPage(url string) {
 			// 发送网页已变动信息给预留邮箱
 			fmt.Println("正在发送报警邮件....")
 
-			err = SendMail("warnning 网页内容变动", url)
+			err = SendMail("warnning 网页内容变动", url+"<br>"+diffstr)
 
 			//网页变动，并且发送邮件成功后，把新网页做为对比网页保存,这样可以防止不断的重复发送邮件。
 			if err == nil {
@@ -292,7 +297,15 @@ func monAPage(url string) {
 		time.Sleep(time.Second * time.Duration(*interval))
 	}
 }
-
+func difftxt(str1 string, str2 string) string {
+	/*	dmp := diffmatchpatch.New()
+		diffs := dmp.DiffMain(str1, str2, true)
+		out := dmp.DiffPrettyText(diffs)
+		return string(out)
+	*/
+	out := diff.LineDiff(str1, str2)
+	return out
+}
 func SendMail(subject string, body string) error {
 
 	var smptServer string
@@ -300,13 +313,18 @@ func SendMail(subject string, body string) error {
 	var user string
 	var pass string
 
-	myLocks.configLock.Lock()
+	//	myLocks.configLock.Lock()
 	fileObj, err := os.Open("config.txt")
+
 	if err != nil {
 		fmt.Println("打开邮件配置文件失败确认已在config.txt文件中配置了邮箱信息")
 		return nil
 	}
-
+	defer func() {
+		if fileObj != nil {
+			fileObj.Close()
+		}
+	}()
 	//此处使用按行读取方式读email取配置文件中的发送邮箱配置情况
 	rd := bufio.NewReader(fileObj)
 	line, err := rd.ReadString('\n')
@@ -339,13 +357,14 @@ func SendMail(subject string, body string) error {
 		line = strings.Replace(line, "\r\n", "", -1)
 		line = strings.Replace(line, "\n", "", -1)
 		line = strings.TrimSpace(line)
-
-		toEmailAddress = append(toEmailAddress, line)
-
+		if len(line) > 5 {
+			toEmailAddress = append(toEmailAddress, line)
+		}
 		line, err = rd.ReadString('\n')
 	}
-	fileObj.Close()
-	myLocks.configLock.Unlock()
+	if fileObj != nil {
+		fileObj.Close()
+	}
 
 	fmt.Println("目标邮件列表:", toEmailAddress)
 	intPort, _ := strconv.Atoi(port) //转换端口类型为int
@@ -361,7 +380,8 @@ func SendMail(subject string, body string) error {
 	d := gomail.NewDialer(smptServer, intPort, user, pass)
 	//fmt.Println("发邮件", m, d)
 	err = d.DialAndSend(m)
-	fmt.Println("邮件发送结果:", err, "\n")
+	fmt.Println("邮件发送结果:", time.Now(), err, "\n")
+	//	myLocks.configLock.Unlock()
 	return err
 
 }
