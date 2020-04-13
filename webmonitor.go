@@ -5,21 +5,26 @@ import (
 	"fmt"
 	"io"
 
+	"crypto/md5"
+	"encoding/hex"
 	//"net"
 	"bufio"
 	"crypto/tls"
 	"errors"
 	"github.com/sanmin33/diff"
+	"gopkg.in/gomail.v2"
+	"io/ioutil"
+	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"os/exec"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"gopkg.in/gomail.v2"
 )
 
 var interval = flag.Int("interval", 10, "两次读取网页监控的间隔时间")
@@ -34,7 +39,7 @@ type PagesStruct struct {
 	nowPages map[string]string
 	nowMM    map[string]map[string]string //用于存放网页二级src资源的url及内容
 	reString map[string]string
-	isOpen   map[string]bool
+	isFalse  map[string]int
 }
 type locks struct {
 	configLock sync.Mutex
@@ -58,8 +63,11 @@ func main() {
 	pages.nowMM = make(map[string]map[string]string)
 
 	pages.reString = make(map[string]string)
-	pages.isOpen = make(map[string]bool)
+	pages.isFalse = make(map[string]int)
 	writeToFile("./log/change.txt", fmt.Sprint(time.Now().Format("2006/1/2 15:04:05"))+" 监控程序启动。。。。\n")
+	go func() {
+		log.Println(http.ListenAndServe(":6660", nil))
+	}()
 	FileRead(*fileName)
 	for runtime.NumGoroutine() > 1 {
 		time.Sleep(time.Second * 3)
@@ -75,15 +83,14 @@ func FileRead(name string) {
 	}
 	defer fileObj.Close()
 	//在定义空的byte列表时尽量大一些，否则这种方式读取内容可能造成文件读取不完整
-	buf := make([]byte, 4096)
 
-	n, err := fileObj.Read(buf)
+	buf, err := ioutil.ReadAll(fileObj)
 	if err != nil {
 		fmt.Println("读取ip列表失败！")
 		return
 	}
 
-	result := string(buf[:n])
+	result := string(buf)
 	//fmt.Println("原始文件内容:", result)
 
 	//对ip列表文件的原始内容进行处理，去除多余空格 ，统一换行符
@@ -104,16 +111,19 @@ func FileRead(name string) {
 			pages.reString[url] = re
 			urls[i] = url
 		}
+
+		fmt.Println(urls[i])
 	}
 
-	//初始化网页是否可以打开参数为true
+	//初始化网页打开失败次数为0
 	for i := 0; i < len(urls); i++ {
-		pages.isOpen[urls[i]] = true
+		pages.isFalse[urls[i]] = 0
 	}
 
 	// 间隔两次分别读每个url的信息，如果不一致，把两次数据不一致的url打印出来
 	fmt.Println("正在第一次读取被监控的网页内容。。。")
 	for i := 0; i < len(urls); i++ {
+		fmt.Println("正在读网址：", urls[i])
 		pages.oldPages[urls[i]], _ = readAURL(urls[i])
 
 		//如果对应url存在正则表达式过滤串则过滤后保存
@@ -127,6 +137,7 @@ func FileRead(name string) {
 	fmt.Println("正在第二次读取被监控的网页内容。。。")
 	var haveDiffPage = false
 	for i := 0; i < len(urls); i++ {
+		fmt.Println("正在读网址：", urls[i])
 		pages.nowPages[urls[i]], _ = readAURL(urls[i])
 		//如果对应url存在正则表达式过滤串则过滤后保存
 		if pages.reString[urls[i]] != "" {
@@ -159,12 +170,16 @@ func FileRead(name string) {
 //readAURL根据传入的url读一个网页的内容，如果读不成功，返回空串和错误。
 func readAURL(url string) (string, error) {
 	var err error
-	pageBuf := make([]byte, 4096)
-	//	client := &http.Client{}
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	var client *http.Client
+	if strings.Index(url, "https") == 0 {
+		tr := &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+		client = &http.Client{Transport: tr}
+	} else {
+
+		client = &http.Client{}
 	}
-	client := &http.Client{Transport: tr}
 	//生成请求
 	reqest, err := http.NewRequest("GET", url, nil)
 
@@ -182,9 +197,6 @@ func readAURL(url string) (string, error) {
 	reqest.Close = true
 	response, err := client.Do(reqest)
 
-	//TODO 需要等待数据返回吗？选等一秒吧
-	time.Sleep(time.Second * 1)
-
 	if err != nil {
 		fmt.Println("获取网页内容失败", url, err)
 		return "", err
@@ -196,11 +208,11 @@ func readAURL(url string) (string, error) {
 		return "", errors.New("读网页错误，错误码：" + strconv.Itoa(response.StatusCode))
 	}
 
-	var n int
 	var page string
-	for err = nil; err == nil; {
-		n, err = response.Body.Read(pageBuf)
-		page = page + string(pageBuf[:n])
+	pageByte, err := ioutil.ReadAll(response.Body)
+	page = string(pageByte)
+	if err != nil {
+		return "", errors.New("读网页内容错误:" + err.Error())
 	}
 	if page == "" {
 		return page, errors.New("读取到空页面，这是不正常的!!!")
@@ -217,11 +229,15 @@ func monAPage(url string) {
 	}()
 
 	for {
+		fmt.Println("开始读:", url)
 		page, err = readAURL(url)
+		fmt.Println("完成读:", url, err)
+		fmt.Println(runtime.NumGoroutine())
 		if err != nil {
 			// 发送网页无法打开的错误给预留邮箱。
 
-			if pages.isOpen[url] == true {
+			pages.isFalse[url]++
+			if pages.isFalse[url] == 4 {
 				fmt.Println("异常，无法打开网页", url, fmt.Sprint(err), time.Now())
 				err = SendMail("读网页错误", url)
 
@@ -230,7 +246,6 @@ func monAPage(url string) {
 					fmt.Println("写入change.txt文件失败")
 				}
 
-				pages.isOpen[url] = false
 			}
 
 			time.Sleep(time.Second * time.Duration(*interval))
@@ -245,7 +260,7 @@ func monAPage(url string) {
 		pages.nowPages[url] = page
 		pages.Unlock()
 
-		if pages.isOpen[url] == false {
+		if pages.isFalse[url] > 3 {
 			fmt.Println("网页已恢复", url)
 
 			_, err = writeToFile("./log/change.txt", fmt.Sprint(time.Now().Format("2006/1/2 15:04:05"))+" "+url+" 网页已恢复\n")
@@ -254,12 +269,15 @@ func monAPage(url string) {
 			}
 			err = SendMail("网页已恢复", url)
 
-			pages.isOpen[url] = true
 		}
-		if pages.nowPages[url] != pages.oldPages[url] {
-			diffstr := difftxt(pages.oldPages[url], pages.nowPages[url])
-			diffstr = strings.Replace(diffstr, "<", "&lt", -1)
-			diffstr = strings.Replace(diffstr, ">", "&gt", -1)
+		//只要能正常读网页了，失败次数就要清零
+		pages.isFalse[url] = 0
+
+		if md5v1(pages.nowPages[url]) != md5v1(pages.oldPages[url]) {
+			diffstr := diffTxt2(pages.oldPages[url], pages.nowPages[url])
+			diffstr = "<pre>" + diffstr + "</pre>"
+			//diffstr = strings.Replace(diffstr, "<", "&lt", -1)
+			//diffstr = strings.Replace(diffstr, ">", "&gt", -1)
 			fmt.Println(url, "\n", "warnning 网页已变动")
 			fmt.Println(diffstr)
 			fmt.Println("两次网页的内容分别保存于同目录下urlold.html和urlnow.html文件中，请用文本比较工具查看差异部分")
@@ -286,7 +304,7 @@ func monAPage(url string) {
 			// 发送网页已变动信息给预留邮箱
 			fmt.Println("正在发送报警邮件....")
 
-			err = SendMail("warnning 网页内容变动", url+"<br>"+diffstr)
+			err = SendMail("warnning 网页内容变动", url+"\n"+diffstr)
 
 			//网页变动，并且发送邮件成功后，把新网页做为对比网页保存,这样可以防止不断的重复发送邮件。
 			if err == nil {
@@ -305,6 +323,21 @@ func difftxt(str1 string, str2 string) string {
 	*/
 	out := diff.LineDiff(str1, str2)
 	return out
+}
+func diffTxt2(str1 string, str2 string) string {
+	fileName1 := md5v1(str1)
+	fileName2 := md5v1(str2)
+	writeToNewFile(fileName1, str1)
+	writeToNewFile(fileName2, str2)
+	strCmd := "diff " + fileName1 + " " + fileName2
+	myCmd := exec.Command("bash", "-c", strCmd)
+	byteDiff, err := myCmd.Output()
+
+	os.Remove(fileName1)
+	os.Remove(fileName2)
+	fmt.Println(string(byteDiff), err)
+	return string(byteDiff)
+
 }
 func SendMail(subject string, body string) error {
 
@@ -375,7 +408,7 @@ func SendMail(subject string, body string) error {
 	m.SetHeader("From", user)
 	m.SetHeader("To", toEmailAddress...) //发送给多个用户
 	m.SetHeader("Subject", subject)      //设置邮件主题
-	m.SetBody("text/html", body)         //设置邮件正文
+	m.SetBody("text/plain", body)        //设置邮件正文
 
 	d := gomail.NewDialer(smptServer, intPort, user, pass)
 	//fmt.Println("发邮件", m, d)
@@ -385,7 +418,33 @@ func SendMail(subject string, body string) error {
 	return err
 
 }
+func writeToNewFile(wFileName string, conext string) (n int, err error) {
+	var err1 error
+	var f *os.File
 
+	if checkFileIsExist(wFileName) { //如果文件存在
+		err1 = os.Remove(wFileName)
+		if err1 != nil {
+			fmt.Println(err1)
+			return -1, err1
+		}
+
+	}
+	f, err1 = os.Create(wFileName) //创建文件
+	if err1 != nil {
+		fmt.Println(err1)
+		return -1, err1
+	}
+
+	n, err1 = io.WriteString(f, conext) //写入文件(字符串)
+	if err1 != nil {
+		fmt.Println(err1)
+		return -1, err1
+	}
+	f.Close()
+
+	return n, err1
+}
 func writeToFile(wFileName string, conext string) (n int, err error) {
 	var err1 error
 	var f *os.File
@@ -424,4 +483,10 @@ func checkFileIsExist(filename string) bool {
 		exist = false
 	}
 	return exist
+}
+func md5v1(str string) string {
+	h := md5.New()
+	h.Write([]byte(str))
+	return hex.EncodeToString(h.Sum(nil))
+
 }
