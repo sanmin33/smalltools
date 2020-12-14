@@ -8,7 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/buger/jsonparser"
-	"io"
+	"time"
 	"log"
 	"net"
 	"net/http"
@@ -139,6 +139,7 @@ func handleAServerConn(client *net.TCPConn) {
 	//接下来得到的都是还没有解密的信息，进行解密转发
 	go pcTos.encryptCopy(server, client) //服务端收到的是密文，编码后就成了明文并传给web
 	psToc.encryptCopy(client, server)    //web发过来的是明文，编码后就成了密文，并传给客户端
+	server.Close()  //这句倒是否是必要的？？？？
 }
 
 func deCodereadSplitString(r *net.TCPConn, coder *Rc4, delim []byte) []byte {
@@ -177,20 +178,21 @@ func deCodereadSplitString(r *net.TCPConn, coder *Rc4, delim []byte) []byte {
 	}
 	return rs
 }
+  func (c *Rc4) encryptCopy(dst *net.TCPConn, src *net.TCPConn) {
+      defer dst.Close()
+      defer src.Close()
+      buf := make([]byte, 4096)
+      var err error
+      n := 0
+      for n, err = src.Read(buf); err == nil && n > 0; n, err = src.Read(buf) {
+          //5秒无数据传输就断掉连接
+          dst.SetDeadline(time.Now().Add(time.Second * 5))
+          src.SetDeadline(time.Now().Add(time.Second * 5))
+          c.C.XORKeyStream(buf[:n], buf[:n])
 
-func (c *Rc4) encryptCopy(dst *net.TCPConn, src *net.TCPConn) {
-	defer dst.Close()
-	defer src.Close()
-	buf := make([]byte, 4096)
-	var err error
-	n := 0
-	for n, err = src.Read(buf); err == nil && n > 0; n, err = src.Read(buf) {
-		//5秒无数据传输就断掉连接
-		dst.SetDeadline(time.Now().Add(time.Second * 5))
-		src.SetDeadline(time.Now().Add(time.Second * 5))
-		c.C.XORKeyStream(buf[:n], buf[:n])
+          dst.Write(buf[:n])
+      }
 
-		dst.Write(buf[:n])
-	}
+  }
 
-}
+
