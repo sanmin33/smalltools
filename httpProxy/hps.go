@@ -178,11 +178,16 @@ func deCodereadSplitString(r *net.TCPConn, coder *Rc4, delim []byte) []byte {
 	return rs
 }
 
-func (c *Rc4) encryptCopy(dst io.Writer, src io.Reader) {
+func (c *Rc4) encryptCopy(dst *net.TCPConn, src *net.TCPConn) {
+	defer dst.Close()
+	defer src.Close()
 	buf := make([]byte, 4096)
 	var err error
 	n := 0
 	for n, err = src.Read(buf); err == nil && n > 0; n, err = src.Read(buf) {
+		//5秒无数据传输就断掉连接
+		dst.SetDeadline(time.Now().Add(time.Second * 5))
+		src.SetDeadline(time.Now().Add(time.Second * 5))
 		c.C.XORKeyStream(buf[:n], buf[:n])
 
 		dst.Write(buf[:n])
